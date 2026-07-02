@@ -1,10 +1,10 @@
-const CACHE_NAME = "luckin-label-app-v3";
+const CACHE_NAME = "luckin-label-app-v5";
 const APP_FILES = [
   "./",
   "./index.html",
-  "./styles.css?v=3",
-  "./app.js?v=3",
-  "./qrcode.js?v=3",
+  "./styles.css?v=5",
+  "./app.js?v=5",
+  "./qrcode.js?v=5",
   "./label-template.jpg",
   "./manifest.webmanifest",
   "./icon.svg"

@@ -306,8 +306,19 @@ main {
   display: block;
 }
 
+.grid-jump {
+  display: grid;
+  grid-template-columns: 82px 68px;
+  gap: 8px;
+  align-items: center;
+}
+
+.grid-jump .secondary-button {
+  min-height: 44px;
+}
+
 .grid-search {
-  width: 116px;
+  width: 100%;
 }
 
 .grid-board {
@@ -339,6 +350,11 @@ main {
   border-color: #8fc5e8;
   overflow: hidden;
   background: var(--label);
+}
+
+.grid-cell.highlight {
+  outline: 4px solid rgba(8, 121, 188, 0.42);
+  outline-offset: 2px;
 }
 
 .grid-cell canvas {

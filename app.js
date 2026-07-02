@@ -37,6 +37,21 @@ const blankLabel = {
   time: ""
 };
 
+const OCR_ROIS = [
+  { key: "name", label: "称呼", x: 210, y: 115, w: 355, h: 120, psm: "7" },
+  { key: "number", label: "编号", x: 45, y: 205, w: 520, h: 250, psm: "7", whitelist: "0123456789" },
+  { key: "pickup", label: "取餐", x: 555, y: 240, w: 220, h: 100, psm: "7" },
+  { key: "cups", label: "杯数", x: 550, y: 335, w: 350, h: 120, psm: "7" },
+  { key: "drink", label: "饮品名", x: 50, y: 430, w: 790, h: 170, psm: "6" },
+  { key: "temperature", label: "冷热", x: 55, y: 610, w: 160, h: 120, psm: "7" },
+  { key: "size", label: "规格", x: 205, y: 605, w: 330, h: 120, psm: "7" },
+  { key: "options", label: "糖/加料/备注", x: 55, y: 735, w: 1020, h: 220, psm: "6" },
+  { key: "identityA", label: "产品标识 1", x: 80, y: 1090, w: 350, h: 190, psm: "6" },
+  { key: "identityB", label: "产品标识 2", x: 465, y: 1120, w: 350, h: 150, psm: "6" },
+  { key: "identityC", label: "产品标识 3", x: 850, y: 1080, w: 390, h: 220, psm: "6" },
+  { key: "time", label: "时间", x: 45, y: 1510, w: 520, h: 120, psm: "7", whitelist: "0123456789-/:. " }
+];
+
 const form = document.querySelector("#labelForm");
 const previewCanvas = document.querySelector("#previewCanvas");
 const photoInput = document.querySelector("#photoInput");
@@ -49,6 +64,7 @@ const collectionList = document.querySelector("#collectionList");
 const collectionCount = document.querySelector("#collectionCount");
 const emptyCollected = document.querySelector("#emptyCollected");
 const gridBoard = document.querySelector("#gridBoard");
+const gridJumpForm = document.querySelector("#gridJumpForm");
 const gridSearch = document.querySelector("#gridSearch");
 const installBtn = document.querySelector("#installBtn");
 const labelDialog = document.querySelector("#labelDialog");
@@ -362,6 +378,350 @@ function escapeHtml(text) {
   }[char]));
 }
 
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("无法读取图片"));
+    };
+    image.src = url;
+  });
+}
+
+function imageToCanvas(image, maxSide = 1800) {
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(image.naturalWidth * scale);
+  canvas.height = Math.round(image.naturalHeight * scale);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function waitForOpenCv(timeoutMs = 7000) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (window.cv && typeof cv.Mat === "function" && typeof cv.imread === "function") {
+        resolve(true);
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        resolve(false);
+        return;
+      }
+      window.setTimeout(check, 120);
+    };
+    check();
+  });
+}
+
+function orderQuadPoints(points) {
+  const sorted = [...points].sort((a, b) => a.x + a.y - (b.x + b.y));
+  const tl = sorted[0];
+  const br = sorted[3];
+  const middle = sorted.slice(1, 3).sort((a, b) => a.y - a.x - (b.y - b.x));
+  return [tl, middle[0], br, middle[1]];
+}
+
+function contourToPoints(contour) {
+  const points = [];
+  for (let i = 0; i < contour.rows; i += 1) {
+    const point = contour.intPtr(i, 0);
+    points.push({ x: point[0], y: point[1] });
+  }
+  return points;
+}
+
+function findLabelQuad(src) {
+  const rgb = new cv.Mat();
+  const hsv = new cv.Mat();
+  const mask = new cv.Mat();
+  const kernel = cv.Mat.ones(15, 15, cv.CV_8U);
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  let best = null;
+  let bestArea = 0;
+  let bestContour = null;
+
+  try {
+    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    cv.inRange(hsv, new cv.Scalar(70, 8, 90), new cv.Scalar(118, 150, 255), mask);
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+    cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    for (let i = 0; i < contours.size(); i += 1) {
+      const contour = contours.get(i);
+      const area = cv.contourArea(contour);
+      if (area < src.cols * src.rows * 0.08 || area < bestArea) {
+        contour.delete();
+        continue;
+      }
+
+      bestArea = area;
+      if (bestContour) bestContour.delete();
+      bestContour = contour.clone();
+
+      const peri = cv.arcLength(contour, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(contour, approx, 0.035 * peri, true);
+
+      if (approx.rows === 4) {
+        best = contourToPoints(approx);
+      }
+
+      approx.delete();
+      contour.delete();
+    }
+
+    if (!best && bestContour) {
+      const rect = cv.minAreaRect(bestContour);
+      best = cv.RotatedRect.points(rect).map((point) => ({ x: point.x, y: point.y }));
+    }
+  } finally {
+    rgb.delete();
+    hsv.delete();
+    mask.delete();
+    kernel.delete();
+    contours.delete();
+    hierarchy.delete();
+    if (bestContour) bestContour.delete();
+  }
+
+  return best ? orderQuadPoints(best) : null;
+}
+
+function enhanceOcrCanvas(canvas) {
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const equalized = new cv.Mat();
+  const binary = new cv.Mat();
+  const out = document.createElement("canvas");
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.equalizeHist(gray, equalized);
+    cv.adaptiveThreshold(equalized, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 31, 13);
+    cv.imshow(out, binary);
+  } finally {
+    src.delete();
+    gray.delete();
+    equalized.delete();
+    binary.delete();
+  }
+
+  return out;
+}
+
+function cropRoiCanvas(sourceCanvas, roi, scale = 3) {
+  const padding = 14;
+  const sx = Math.max(0, roi.x - padding);
+  const sy = Math.max(0, roi.y - padding);
+  const sw = Math.min(sourceCanvas.width - sx, roi.w + padding * 2);
+  const sh = Math.min(sourceCanvas.height - sy, roi.h + padding * 2);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+  if (!window.cv || typeof cv.imread !== "function") return canvas;
+
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const binary = new cv.Mat();
+  const kernel = cv.Mat.ones(2, 2, cv.CV_8U);
+  const out = document.createElement("canvas");
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0);
+    cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 35, 11);
+    cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel);
+    cv.imshow(out, binary);
+  } finally {
+    src.delete();
+    gray.delete();
+    binary.delete();
+    kernel.delete();
+  }
+
+  return out;
+}
+
+function cleanRoiText(text) {
+  return String(text || "")
+    .replace(/[|｜]/g, " ")
+    .replace(/[「」『』【】[\]()（）]/g, " ")
+    .replace(/[；;]/g, "，")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanChineseText(text) {
+  return cleanRoiText(text)
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9*_,，。.\-\/\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseRoiValue(key, text) {
+  const cleaned = cleanRoiText(text);
+  const compact = cleaned.replace(/\s+/g, "");
+
+  if (key === "number") {
+    const match = compact.match(/\d{1,3}/);
+    return match ? { number: padNumber(match[0]) } : {};
+  }
+
+  if (key === "name") {
+    const value = cleaned
+      .replace(/^Hi[,，]*/i, "")
+      .replace(/先生|女士|同学/g, "")
+      .replace(/[^\u4e00-\u9fa5A-Za-z0-9*]/g, "")
+      .slice(0, 16);
+    return value ? { name: value } : {};
+  }
+
+  if (key === "pickup") {
+    if (/外送|送/.test(cleaned)) return { pickup: "外送" };
+    if (/自提|提/.test(cleaned)) return { pickup: "自提" };
+    return {};
+  }
+
+  if (key === "cups") {
+    const match = compact.match(/第?(\d+)[\/／](\d+)杯?/);
+    if (match) return { cupIndex: match[1], cupTotal: match[2] };
+    const nums = compact.match(/\d+/g);
+    if (nums?.length >= 2) return { cupIndex: nums[0], cupTotal: nums[1] };
+    return {};
+  }
+
+  if (key === "temperature") {
+    if (/热|熱/.test(cleaned)) return { temperature: "热" };
+    if (/冰/.test(cleaned)) return { temperature: "冰" };
+    if (/温|溫/.test(cleaned)) return { temperature: "温" };
+    return {};
+  }
+
+  if (key === "size") {
+    const sizeText = compact
+      .replace(/[oO][zZ]?/g, "")
+      .replace(/杯/g, "")
+      .replace(/特大怀/g, "特大")
+      .replace(/特大杯/g, "特大");
+    const match = sizeText.match(/(特大|大|中|小|超大)?\s*(\d{1,2})?/);
+    if (sizeText.includes("特大") || sizeText.includes("20")) return { size: "特大20" };
+    if (sizeText.includes("大")) return { size: "大杯" };
+    if (sizeText.includes("中")) return { size: "中杯" };
+    if (sizeText.includes("小")) return { size: "小杯" };
+    return match?.[0] ? { size: match[0] } : {};
+  }
+
+  if (key === "time") {
+    const normalized = compact
+      .replace(/[.。]/g, "-")
+      .replace(/(\d{4})[-\/]?(\d{1,2})[-\/]?(\d{1,2})[-\s]*(\d{1,2})[:：]?(\d{2})/, "$1-$2-$3 $4:$5");
+    const match = normalized.match(/20\d{2}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/);
+    return match ? { time: match[0] } : {};
+  }
+
+  if (key === "drink") return { drink: cleanChineseText(text).slice(0, 18) };
+  if (key === "options") return { options: cleanChineseText(text).replace(/\s+/g, "，") };
+  if (key === "identityA") return { identityA: cleanChineseText(text).replace(/\s+/g, "\n") };
+  if (key === "identityB") return { identityB: cleanChineseText(text).replace(/\s+/g, "") };
+  if (key === "identityC") return { identityC: cleanChineseText(text).replace(/\s+/g, "\n") };
+
+  return {};
+}
+
+async function recognizeRoiFields(canvas) {
+  const data = {};
+
+  for (let index = 0; index < OCR_ROIS.length; index += 1) {
+    const roi = OCR_ROIS[index];
+    setStatus(`正在识别 ${roi.label} (${index + 1}/${OCR_ROIS.length})...`);
+    const roiCanvas = cropRoiCanvas(canvas, roi);
+    const options = { tessedit_pageseg_mode: roi.psm || "6" };
+    if (roi.whitelist) options.tessedit_char_whitelist = roi.whitelist;
+    const result = await window.Tesseract.recognize(roiCanvas, "chi_sim+eng", options);
+    Object.assign(data, parseRoiValue(roi.key, result.data.text || ""));
+  }
+
+  return data;
+}
+
+async function preparePhotoForOcr(file) {
+  const image = await loadImageFromFile(file);
+  const sourceCanvas = imageToCanvas(image);
+  const hasOpenCv = await waitForOpenCv();
+
+  if (!hasOpenCv) {
+    return {
+      canvas: sourceCanvas,
+      corrected: false,
+      message: "OpenCV 还没加载完成，已使用原图识别。"
+    };
+  }
+
+  setStatus("正在用 OpenCV 矫正标签...");
+  const src = cv.imread(sourceCanvas);
+  const warped = new cv.Mat();
+  let srcPts = null;
+  let dstPts = null;
+  let transform = null;
+  const correctedCanvas = document.createElement("canvas");
+
+  try {
+    const quad = findLabelQuad(src);
+    if (!quad) {
+      return {
+        canvas: enhanceOcrCanvas(sourceCanvas),
+        corrected: false,
+        message: "没有稳定找到标签四边形，已增强原图识别。"
+      };
+    }
+
+    srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      quad[0].x, quad[0].y,
+      quad[1].x, quad[1].y,
+      quad[2].x, quad[2].y,
+      quad[3].x, quad[3].y
+    ]);
+    dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      0, 0,
+      LABEL_W, 0,
+      LABEL_W, LABEL_H,
+      0, LABEL_H
+    ]);
+    transform = cv.getPerspectiveTransform(srcPts, dstPts);
+    cv.warpPerspective(src, warped, transform, new cv.Size(LABEL_W, LABEL_H), cv.INTER_CUBIC, cv.BORDER_REPLICATE);
+    cv.imshow(correctedCanvas, warped);
+
+    return {
+      canvas: enhanceOcrCanvas(correctedCanvas),
+      correctedCanvas,
+      corrected: true,
+      message: "已矫正标签并增强文字。"
+    };
+  } finally {
+    src.delete();
+    warped.delete();
+    if (srcPts) srcPts.delete();
+    if (dstPts) dstPts.delete();
+    if (transform) transform.delete();
+  }
+}
+
 function saveCurrentLabel() {
   const data = normalizeLabel(getFormData());
   if (!data.number) {
@@ -522,18 +882,28 @@ async function recognizePhoto(file) {
     setStatus("OCR 组件还没加载完成，请稍等几秒后再试；也可以先手动填写。", true);
     return;
   }
-  setStatus("正在识别照片，第一次加载会稍慢...");
+  setStatus("正在读取照片...");
   try {
-    const result = await window.Tesseract.recognize(file, "chi_sim+eng", {
-      logger(event) {
-        if (event.status === "recognizing text") {
-          setStatus(`正在识别照片 ${Math.round(event.progress * 100)}%`);
+    const prepared = await preparePhotoForOcr(file);
+    let parsed = {};
+
+    if (prepared.correctedCanvas) {
+      setStatus(`${prepared.message} 正在按 ROI 识别红框内容...`);
+      parsed = await recognizeRoiFields(prepared.correctedCanvas);
+    } else {
+      setStatus(`${prepared.message} 正在识别整张图片...`);
+      const result = await window.Tesseract.recognize(prepared.canvas, "chi_sim+eng", {
+        logger(event) {
+          if (event.status === "recognizing text") {
+            setStatus(`正在识别整张图片 ${Math.round(event.progress * 100)}%`);
+          }
         }
-      }
-    });
-    const parsed = parseOcrText(result.data.text || "");
+      });
+      parsed = parseOcrText(result.data.text || "");
+    }
+
     setFormData({ ...getFormData(), ...parsed });
-    setStatus("识别完成，已自动填入可识别内容。请核对后保存。");
+    setStatus(`${prepared.corrected ? "OpenCV 矫正 + ROI 识别完成，" : ""}已自动填入可识别内容。请核对后保存。`);
   } catch (error) {
     setStatus(`识别失败：${error.message || "请改为手动填写"}`, true);
   } finally {
@@ -619,20 +989,42 @@ dialogExportBtn.addEventListener("click", () => {
   if (item) downloadLabel(item, `luckin-${item.number}.png`);
 });
 
-gridSearch.addEventListener("input", () => {
-  const number = padNumber(gridSearch.value);
-  if (number.length !== 3) return;
-  const target = gridBoard.querySelector(`[data-number="${number}"]`);
-  if (target) {
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
+function jumpToGridNumber(value) {
+  const number = padNumber(value);
+  if (!number || Number(number) < 1 || Number(number) > 999) return;
+
+  activateScreen("grid");
+  gridSearch.value = number;
+
+  window.setTimeout(() => {
+    const target = gridBoard.querySelector(`[data-number="${number}"]`);
+    if (!target) return;
+
+    gridBoard.querySelectorAll(".grid-cell.highlight").forEach((cell) => {
+      cell.classList.remove("highlight");
+    });
+    target.classList.add("highlight");
+    target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
     target.animate(
       [
         { transform: "scale(1)", boxShadow: "0 0 0 rgba(8,121,188,0)" },
-        { transform: "scale(1.05)", boxShadow: "0 0 0 4px rgba(8,121,188,0.24)" },
+        { transform: "scale(1.06)", boxShadow: "0 0 0 5px rgba(8,121,188,0.26)" },
         { transform: "scale(1)", boxShadow: "0 0 0 rgba(8,121,188,0)" }
       ],
-      { duration: 700 }
+      { duration: 900 }
     );
+  }, 80);
+}
+
+gridJumpForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  jumpToGridNumber(gridSearch.value);
+});
+
+gridSearch.addEventListener("input", () => {
+  gridSearch.value = gridSearch.value.replace(/\D/g, "").slice(0, 3);
+  if (gridSearch.value.length === 3) {
+    jumpToGridNumber(gridSearch.value);
   }
 });
 

@@ -7,10 +7,11 @@
     <title>瑞幸标签册</title>
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=3">
+    <link rel="stylesheet" href="./styles.css?v=5">
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script defer src="./qrcode.js?v=3"></script>
-    <script defer src="./app.js?v=3"></script>
+    <script async src="https://docs.opencv.org/4.10.0/opencv.js"></script>
+    <script defer src="./qrcode.js?v=5"></script>
+    <script defer src="./app.js?v=5"></script>
   </head>
   <body>
     <header class="app-header">
@@ -143,7 +144,10 @@
             <p class="eyebrow">001-999</p>
             <h2 id="gridTitle">图鉴</h2>
           </div>
-          <input class="grid-search" id="gridSearch" inputmode="numeric" maxlength="3" placeholder="跳转编号">
+          <form class="grid-jump" id="gridJumpForm">
+            <input class="grid-search" id="gridSearch" inputmode="numeric" maxlength="3" placeholder="编号">
+            <button class="secondary-button" type="submit">跳转</button>
+          </form>
         </div>
         <div class="grid-board" id="gridBoard" aria-live="polite"></div>
       </section>
