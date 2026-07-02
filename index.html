@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#5fb7ec">
+    <title>瑞幸标签册</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css?v=3">
+    <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script defer src="./qrcode.js?v=3"></script>
+    <script defer src="./app.js?v=3"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Luckin Sticker</p>
+        <h1>瑞幸标签册</h1>
+      </div>
+      <button class="icon-button" id="installBtn" type="button" hidden aria-label="安装到手机桌面" title="安装到手机桌面">
+        <span aria-hidden="true">⬇</span>
+      </button>
+    </header>
+
+    <main>
+      <section class="screen active" id="screen-editor" aria-labelledby="editorTitle">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Edit</p>
+            <h2 id="editorTitle">制作标签</h2>
+          </div>
+          <button class="secondary-button" id="sampleBtn" type="button">示例</button>
+        </div>
+
+        <div class="camera-row">
+          <label class="primary-button file-button">
+            <input id="photoInput" type="file" accept="image/*" capture="environment">
+            拍照识别
+          </label>
+          <button class="secondary-button" id="clearBtn" type="button">清空</button>
+        </div>
+        <p class="status" id="ocrStatus" role="status"></p>
+
+        <form class="label-form" id="labelForm" autocomplete="off">
+          <label>
+            <span>编号</span>
+            <input name="number" inputmode="numeric" maxlength="3" placeholder="001" required>
+          </label>
+          <label>
+            <span>称呼</span>
+            <input name="name" placeholder="刘**">
+          </label>
+          <label>
+            <span>称谓</span>
+            <input name="title" placeholder="先生">
+          </label>
+          <label>
+            <span>取餐</span>
+            <select name="pickup">
+              <option>自提</option>
+              <option>外送</option>
+            </select>
+          </label>
+          <label>
+            <span>第几杯</span>
+            <input name="cupIndex" inputmode="numeric" placeholder="1">
+          </label>
+          <label>
+            <span>总杯数</span>
+            <input name="cupTotal" inputmode="numeric" placeholder="1">
+          </label>
+          <label>
+            <span>冷热</span>
+            <select name="temperature">
+              <option>热</option>
+              <option>冰</option>
+              <option>温</option>
+            </select>
+          </label>
+          <label>
+            <span>规格</span>
+            <input name="size" placeholder="特大20">
+          </label>
+          <label class="wide">
+            <span>饮品名</span>
+            <input name="drink" placeholder="马斯卡彭生酪拿铁">
+          </label>
+          <label class="wide">
+            <span>糖/加料/备注</span>
+            <textarea name="options" rows="2" placeholder="标准糖"></textarea>
+          </label>
+          <label>
+            <span>产品标识 1</span>
+            <input name="identityA" placeholder="埃塞俄比亚 单一产区">
+          </label>
+          <label>
+            <span>产品标识 2</span>
+            <input name="identityB" placeholder="IAC铂金豆">
+          </label>
+          <label>
+            <span>产品标识 3</span>
+            <input name="identityC" placeholder="花香可可浓 糖口感">
+          </label>
+          <label>
+            <span>时间</span>
+            <input name="time" placeholder="2026-07-01 09:07">
+          </label>
+        </form>
+
+        <div class="section-title preview-heading">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>实时预览</h2>
+          </div>
+          <button class="secondary-button" id="exportBtn" type="button">导出图片</button>
+        </div>
+
+        <div class="preview-shell">
+          <canvas id="previewCanvas" width="820" height="1040" aria-label="标签实时预览"></canvas>
+        </div>
+
+        <div class="action-bar">
+          <button class="primary-button" id="saveBtn" type="button">保存到标签册</button>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-collected" aria-labelledby="collectedTitle">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Collection</p>
+            <h2 id="collectedTitle">已收集</h2>
+          </div>
+          <span class="count-pill" id="collectionCount">0</span>
+        </div>
+        <div class="empty-state" id="emptyCollected">还没有保存标签。</div>
+        <div class="collection-list" id="collectionList"></div>
+      </section>
+
+      <section class="screen" id="screen-grid" aria-labelledby="gridTitle">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">001-999</p>
+            <h2 id="gridTitle">图鉴</h2>
+          </div>
+          <input class="grid-search" id="gridSearch" inputmode="numeric" maxlength="3" placeholder="跳转编号">
+        </div>
+        <div class="grid-board" id="gridBoard" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="主导航">
+      <button class="tab active" type="button" data-screen="editor">制作</button>
+      <button class="tab" type="button" data-screen="collected">已收集</button>
+      <button class="tab" type="button" data-screen="grid">图鉴</button>
+    </nav>
+
+    <dialog class="preview-dialog" id="labelDialog" aria-labelledby="dialogTitle">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">Preview</p>
+          <h2 id="dialogTitle">标签预览</h2>
+        </div>
+        <button class="icon-button" id="closeDialogBtn" type="button" aria-label="关闭预览" title="关闭预览">×</button>
+      </div>
+      <canvas id="dialogCanvas" width="1440" height="1707" aria-label="图鉴标签大图预览"></canvas>
+      <div class="dialog-actions">
+        <button class="secondary-button" id="dialogEditBtn" type="button">编辑</button>
+        <button class="primary-button" id="dialogExportBtn" type="button">导出图片</button>
+      </div>
+    </dialog>
+  </body>
+</html>
